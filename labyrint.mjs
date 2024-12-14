@@ -9,12 +9,59 @@ import ANSI from "./ANSI.mjs";
 import KeyBoardManager from "./keyboardManager.mjs";
 import "./prototypes.mjs"
 import { level1 } from "./levels.mjs";
+import SPLASH from "./splash.mjs"
 
-const FPS = 250; // 60 frames i sekundet sån sirkus..
+const SETTINGS = {
+    FPS: 250,
+    cashDropChance: 0.95,
+    MAX_ATTACK: 2,
+    LOOT_MIN: 3,
+    LOOT_MAX: 7,
+    HP_MAX: 10,
+    MOVEMENT_SPEED: 1,
+    SPLASH_DURATION: 2000
+};
+
+const GRAPHICS = {
+    EMPTY: " ",
+    HERO: "H",
+    LOOT: "$",
+    WALL: "█",
+    DOOR: "D",
+    HEART: " ❤️ ",
+    BAD_THINGS: ["B"]
+};
+
+const playerStats = { 
+    hp: SETTINGS.HP_MAX, 
+    cash: 0, 
+    attack: 1.1 
+};
+
+const ENEMY_STATS = {
+    HP_MAX: 6,
+    HP_MIN: 4,
+    DAMAGE: 0.7
+};
+
+const THINGS = [GRAPHICS.LOOT, GRAPHICS.EMPTY];
+const NPCs = [];
+const POSSIBLE_PICKUPS = [
+    { name: "a Sword", attribute: "attack is changed by", damageValue: 5 },
+    { name: "a Spear", attribute: "attack is changed by", damageValue: 3 },
+]
+
+const EVENT_TEXTS = {
+    PLAYER_GAINED: `Player gained `,
+    PLAYER_FOUND: `Player found `,
+    PLAYER_DEALT: `Player dealt `,
+    BASTARD_DEALS: `Bastard dealt `,
+    DAMAGE_POINTS: ` points of damage`,
+    BASTARD_DEATH: `, and the bastard dies...`
+};
+
 let rawLevel = level1;
 
-// Brettet som er lastet inn er i form av tekst, vi må omgjøre teksten til en 
-// to dimensjonal liste [][] for å kunne tolke hva som er hvor etc.
 let tempLevel = rawLevel.split("\n");
 let level = [];
 for (let i = 0; i < tempLevel.length; i++) {
@@ -23,7 +70,6 @@ for (let i = 0; i < tempLevel.length; i++) {
     level.push(outputRow);
 }
 
-// Dette er farge palleten for de ulike symbolene, brukes når vi skriver dem ut.
 let pallet = {
     "█": ANSI.COLOR.LIGHT_GRAY,
     "H": ANSI.COLOR.RED,
@@ -31,59 +77,39 @@ let pallet = {
     "B": ANSI.COLOR.GREEN
 }
 
+let isDirty = true; 
 
-let isDirty = true; // For å ungå at vi tegner på hver oppdatering (kan skape flimring) så bruker vi denne variabelen til å indikere at det skal tegnes på nytt,
-
-// Hvor er spilleren på brettet. Dersom row og col er null så kan vi anta at vi akkurat har lastet brettet.
 let playerPos = {
     row: null,
     col: null,
 }
 
-// Konstanter for ulike elementer av spillet. 
-const EMPTY = " ";
-const HERO = "H";
-const LOOT = "$"
-const THINGS = [LOOT, EMPTY];
-const BAD_THINGS = ["B"];
-const NPCs = [];
-const POSSIBLE_PICKUPS = [
-    { name: "Sword", attribute: "attack", value: 5 },
-    { name: "Spear", attribute: "attack", value: 3 },
-]
+let eventText = ""; 
 
-const HP_MAX = 10;
-const MAX_ATTACK = 2;
+console.clear();
 
-const playerStats = { hp: HP_MAX, chash: 0, attack: 1.1 }
+console.log(SPLASH);
 
-let eventText = ""; // Dersom noe intreffer så vil denne variabelen kunne brukes til å fortelle spilleren om det
+await new Promise(resolve => setTimeout(resolve, SETTINGS.SPLASH_DURATION));
 
-// I dette spillet brukker vi ikke en vanlig loop til å kjøre spill logikken vår.
-// Men setInterval funksjonen virker litt på samme måte som en loop, bare at den venter x antall millisekunder mellom hver gang den utfører koden vår.
-let gl = setInterval(gameLoop, FPS)
+let gl = setInterval(gameLoop, SETTINGS.FPS)
 
 function update() {
 
-    // Denne testen spør egentlig, er brettet akkurat lastet inn?
     if (playerPos.row == null) {
 
-        // Vi iterere over alle rader
         for (let row = 0; row < level.length; row++) {
-            // Vi iterere over alle koloner
             for (let col = 0; col < level[row].length; col++) {
 
-                // For hver celle ([rad][kolone]) sjekker vi om det er noe for oss å håndtere.
 
                 let value = level[row][col];
-                if (value == "H") { // Dersom verdien er H, da har vi funnet helten vår
+                if (value == GRAPHICS.HERO) { 
                     playerPos.row = row;
                     playerPos.col = col;
 
-                } else if (BAD_THINGS.includes(value)) { // Posisjonen inneholder en "fiende" da må vi gi fienden noen stats for senere bruk
-
-                    let hp = Math.round(Math.random() * 6) + 4;
-                    let attack = 0.7 + Math.random();
+                } else if (GRAPHICS.BAD_THINGS.includes(value)) { 
+                    let hp = Math.round(Math.random() * ENEMY_STATS.HP_MAX) + ENEMY_STATS.HP_MIN;
+                    let attack = ENEMY_STATS.DAMAGE + Math.random();
                     let badThing = { hp, attack, row, col };
                     NPCs.push(badThing);
                 }
@@ -91,56 +117,47 @@ function update() {
         }
     }
 
+    let drow = 0; 
+    let dcol = 0; 
 
-    let drow = 0; // variabel for spillerens ønskede endring vertikalt
-    let dcol = 0; // varianel for spillerens ænskede endring horizontalt. 
-
-    // Nå sjekker vi om spilleren har prøvd å bevege seg vertikalt
     if (KeyBoardManager.isUpPressed()) {
         drow = -1;
     } else if (KeyBoardManager.isDownPressed()) {
         drow = 1;
     }
-    // Nå sjekker vi horisontalt 
     if (KeyBoardManager.isLeftPressed()) {
         dcol = -1;
     } else if (KeyBoardManager.isRightPressed()) {
         dcol = 1;
     }
 
-    // Så bruker vi den ønskede endringen til å kalulere ny posisjon på kartet.
-    // Merk at vi ikke flytter spilleren dit enda, for det er ikke sikkert det er mulig.
-    let tRow = playerPos.row + (1 * drow);
-    let tcol = playerPos.col + (1 * dcol);
+    let tRow = playerPos.row + (SETTINGS.MOVEMENT_SPEED * drow);
+    let tcol = playerPos.col + (SETTINGS.MOVEMENT_SPEED * dcol);
 
-    if (THINGS.includes(level[tRow][tcol])) { // Er det en gjenstand der spilleren prøver å gå?
+    if (THINGS.includes(level[tRow][tcol])) { 
 
         let currentItem = level[tRow][tcol];
-        if (currentItem == LOOT) {
+        if (currentItem == GRAPHICS.LOOT) {
 
-            if (Math.random() < 0.95) { // 95% av tiden gir vi "cash" som loot
-                let loot = Number.randomBetween(3, 7);
-                playerStats.chash += loot;
-                eventText = `Player gained ${loot}$`; // Vi bruker eventText til å fortelle spilleren hva som har intruffet.
-            } else { // i 5% av tilfellen tildeler vi en tilfeldig gjenstand fra listen over gjenstander. 
+            if (Math.random() < SETTINGS.cashDropChance) { 
+                let loot = Math.ceil(Math.random() * (SETTINGS.LOOT_MAX - SETTINGS.LOOT_MIN) + SETTINGS.LOOT_MIN);
+                playerStats.cash += loot;
+                eventText = `${EVENT_TEXTS.PLAYER_GAINED} ${loot}$`; 
+            } else { 
                 let item = POSSIBLE_PICKUPS.random();
                 playerStats.attack += item.value;
-                eventText = `Player found a ${item.name}, ${item.attribute} is changed by ${item.value}`;// Vi bruker eventText til å fortelle spilleren hva som har intruffet.
+                eventText = `${EVENT_TEXTS.PLAYER_FOUND} ${item.name}, ${item.attribute} ${item.damageValue}`;
             }
         }
 
-        level[playerPos.row][playerPos.col] = EMPTY; // Der helten står nå settes til tom 
-        level[tRow][tcol] = HERO; // Den nye plaseringen på kartet settes til å inneholde helten
+        level[playerPos.row][playerPos.col] = GRAPHICS.EMPTY; 
+        level[tRow][tcol] = GRAPHICS.HERO; 
 
-        // Oppdaterer heltens posisjon
         playerPos.row = tRow;
         playerPos.col = tcol;
 
-        // Sørger for at vi tegner den nye situasjonen. 
         isDirty = true;
-    } else if (BAD_THINGS.includes(level[tRow][tcol])) { // Spilleren har forsøkt å gå inn der hvor det står en "motstander" av en eller annen type
-
-        // Vi må finne den riktige "motstanderen" i listen over motstandere. 
+    } else if (GRAPHICS.BAD_THINGS.includes(level[tRow][tcol])) { 
         let antagonist = null;
         for (let i = 0; i < NPCs.length; i++) {
             let b = NPCs[i];
@@ -149,56 +166,46 @@ function update() {
             }
         }
 
-        // Vi beregner hvor mye skade spilleren påfører motstanderen
-        let attack = ((Math.random() * MAX_ATTACK) * playerStats.attack).toFixed(2);
-        antagonist.hp -= attack; // Påfører skaden. 
+        let attack = ((Math.random() * SETTINGS.MAX_ATTACK) * playerStats.attack).toFixed(2);
+        antagonist.hp -= attack; 
 
-        eventText = `Player dealt ${attack} points of damage`; // Forteller spilleren hvor mye skade som ble påfært
+        eventText = `${EVENT_TEXTS.PLAYER_DEALT} ${attack} ${EVENT_TEXTS.DAMAGE_POINTS}`; 
 
-        if (antagonist.hp <= 0) { // Sjekker om motstanderen er død.
-            eventText += " and the bastard died" // Sier i fra at motstandren er død
-            level[tRow][tcol] = EMPTY; // Markerer stedet på kartet hvor motstanderen sto som ledig. 
+        if (antagonist.hp <= 0) { 
+            eventText += `${EVENT_TEXTS.BASTARD_DEATH}`
+            level[tRow][tcol] = GRAPHICS.EMPTY;
         } else {
-            // Dersom motstanderen ikke er død, så slår vedkommene tilbake. 
-            attack = ((Math.random() * MAX_ATTACK) * antagonist.attack).toFixed(2);
+            attack = ((Math.random() * SETTINGS.MAX_ATTACK) * antagonist.attack).toFixed(2);
             playerStats.hp -= attack;
-            eventText += `\nBastard deals ${attack} back`;
+            eventText += `\n${EVENT_TEXTS.BASTARD_DEALS} ${attack}`;
         }
 
-        // Setter temp pos tilbake siden dette har vært en kamp runde
         tRow = playerPos.row;
         tcol = playerPos.col;
 
-        // Sørger for at vi tegner den nye situasjonen.
         isDirty = true;
-    }
+    } 
 }
 
 function draw() {
 
-    // Vi tegner kunn dersom spilleren har gjort noe.
     if (isDirty == false) {
         return;
     }
     isDirty = false;
 
-    // Tømmer skjermen 
     console.log(ANSI.CLEAR_SCREEN, ANSI.CURSOR_HOME);
 
-    // Starter tegningen vår av den nåværende skjerm. 
-    let rendring = "";
+    let rendering = "";
 
-    // Bruker en funksjon for å tegne opp HUD elementer. 
-    rendring += renderHUD();
+    rendering += renderHUD();
 
-    // Så går vi gjenom celle for celle og legger inn det som skal vises per celle. (husk rad+kolone = celle, tenk regneark)
     for (let row = 0; row < level.length; row++) {
         let rowRendering = "";
         for (let col = 0; col < level[row].length; col++) {
             let symbol = level[row][col];
             if (pallet[symbol] != undefined) {
-                if (BAD_THINGS.includes(symbol)) {
-                    // Kan endre tegning dersom vi vill.
+                if (GRAPHICS.BAD_THINGS.includes(symbol)) {
                     rowRendering += pallet[symbol] + symbol + ANSI.COLOR_RESET;
                 } else {
                     rowRendering += pallet[symbol] + symbol + ANSI.COLOR_RESET;
@@ -208,19 +215,19 @@ function draw() {
             }
         }
         rowRendering += "\n";
-        rendring += rowRendering;
+        rendering += rowRendering;
     }
 
-    console.log(rendring);
-    if (eventText != "") { // dersom noe er lagt til i eventText så skriver vi det ut nå. Dette blir synelig til neste gang vi tegner (isDirty = true)
+    console.log(rendering);
+    if (eventText != "") {
         console.log(eventText);
         eventText = "";
     }
 }
 
 function renderHUD() {
-    let hpBar = `[${ANSI.COLOR.RED + pad(Math.round(playerStats.hp), "❤️") + ANSI.COLOR_RESET}${ANSI.COLOR.BLUE + pad(HP_MAX - playerStats.hp, "❤️") + ANSI.COLOR_RESET}]`
-    let cash = `$:${playerStats.chash}`;
+    let hpBar = `[${ANSI.COLOR.RED + pad(Math.round(playerStats.hp), GRAPHICS.HEART) + ANSI.COLOR_RESET}${ANSI.COLOR.BLUE + pad(SETTINGS.HP_MAX - playerStats.hp, GRAPHICS.HEART) + ANSI.COLOR_RESET} ]`
+    let cash = `$:${playerStats.cash}`;
     return `${hpBar} ${cash} \n`;
 }
 
